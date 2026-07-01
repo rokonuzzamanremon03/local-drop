@@ -4,11 +4,13 @@ import 'package:nsd/nsd.dart';
 import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:permission_handler/permission_handler.dart';
+import 'package:shared_preferences/shared_preferences.dart'; // Name save korar jonno
 
 import '../../core/services/permission_service.dart';
 import '../../core/services/server_service.dart';
 import '../../core/services/discovery_service.dart';
 import '../../core/services/client_service.dart';
+import '../../core/services/auto_updater_service.dart';
 
 class HomeScreen extends StatefulWidget {
   @override
@@ -23,6 +25,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   
   bool _isReady = false;
   String _localIP = "0.0.0.0";
+  String _myDeviceName = "Loading..."; // Custom Device Name
   
   // Transfer State Variables
   bool _isTransferring = false;
@@ -31,6 +34,8 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   
   String _debugMessage = "Initializing...";
   List<Service> _discoveredDevices = [];
+  
+  final TextEditingController _nameController = TextEditingController();
 
   @override
   void initState() {
@@ -49,6 +54,13 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
           Permission.manageExternalStorage,
         ].request();
       }
+
+      // ----------------------------------------------------
+      // Load Custom Device Name from Memory
+      // ----------------------------------------------------
+      SharedPreferences prefs = await SharedPreferences.getInstance();
+      String defaultName = Platform.isAndroid ? "Android Device" : "Windows PC";
+      _myDeviceName = prefs.getString('custom_device_name') ?? defaultName;
 
       if (mounted) setState(() => _debugMessage = "Locating network...");
       
@@ -141,14 +153,14 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
         }
       };
 
-      String myDeviceName = Platform.isAndroid ? "Android Device" : "Windows PC";
-      await _discoveryService.startBroadcasting(myDeviceName, 4000);
+      // Network Broadcasting starts with Custom Name
+      await _discoveryService.startBroadcasting(_myDeviceName, 4000);
 
       await _discoveryService.startScanning(
         onDeviceFound: (Service service) {
           if (mounted) {
             setState(() {
-              if (service.name != myDeviceName) {
+              if (service.name != _myDeviceName) {
                 if (!_discoveredDevices.any((d) => d.name == service.name)) {
                   _discoveredDevices.add(service);
                 } else {
@@ -166,6 +178,9 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
           _localIP = deviceIP;
           _isReady = true; 
         });
+        
+        // App ready howar sathe sathe chupchap update check korbe
+        AutoUpdaterService.checkForUpdates(context);
       }
 
     } catch (e) {
@@ -176,6 +191,77 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
         });
       }
     }
+  }
+
+  // ----------------------------------------------------
+  // Device Name Change Logic
+  // ----------------------------------------------------
+  Future<void> _showEditNameDialog() async {
+    _nameController.text = _myDeviceName;
+    return showDialog(
+      context: context,
+      builder: (BuildContext context) {
+        return AlertDialog(
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          title: Text('Edit Device Name', style: TextStyle(fontWeight: FontWeight.bold)),
+          content: TextField(
+            controller: _nameController,
+            decoration: InputDecoration(
+              hintText: "E.g., Rokon's Phone",
+              border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+              focusedBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(10),
+                borderSide: BorderSide(color: Colors.blue[800]!, width: 2)
+              ),
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: Text('Cancel', style: TextStyle(color: Colors.grey[600])),
+            ),
+            ElevatedButton(
+              onPressed: () async {
+                String newName = _nameController.text.trim();
+                if (newName.isNotEmpty) {
+                  SharedPreferences prefs = await SharedPreferences.getInstance();
+                  await prefs.setString('custom_device_name', newName);
+                  
+                  setState(() => _myDeviceName = newName);
+                  
+                  // Restart Broadcast so other devices see the new name instantly
+                  await _discoveryService.stopAll();
+                  _discoveredDevices.clear();
+                  await _discoveryService.startBroadcasting(_myDeviceName, 4000);
+                  await _discoveryService.startScanning(
+                    onDeviceFound: (Service service) {
+                      if (mounted) {
+                        setState(() {
+                          if (service.name != _myDeviceName) {
+                            if (!_discoveredDevices.any((d) => d.name == service.name)) {
+                              _discoveredDevices.add(service);
+                            } else {
+                              int index = _discoveredDevices.indexWhere((d) => d.name == service.name);
+                              _discoveredDevices[index] = service;
+                            }
+                          }
+                        });
+                      }
+                    },
+                  );
+                  Navigator.of(context).pop();
+                }
+              },
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.blue[800],
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+              ),
+              child: Text('Save', style: TextStyle(color: Colors.white)),
+            ),
+          ],
+        );
+      },
+    );
   }
 
   Future<void> _pickAndSendFile(String targetIp) async {
@@ -277,23 +363,33 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
         backgroundColor: Colors.white,
         title: Row(
           children: [
+            // ----------------------------------------------------
+            // Custom In-App Logo Section
+            // ----------------------------------------------------
             Container(
-              padding: EdgeInsets.all(6),
+              padding: EdgeInsets.all(4),
               decoration: BoxDecoration(
                 color: Colors.blue[50],
                 borderRadius: BorderRadius.circular(8)
               ),
-              child: Icon(Icons.water_drop_rounded, color: Colors.blue[800], size: 24),
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(6),
+                child: Image.asset(
+                  'assets/logo.png', // Apnar custom logo load hocche
+                  width: 26, 
+                  height: 26, 
+                  fit: BoxFit.cover,
+                  errorBuilder: (context, error, stackTrace) {
+                    // Jodi kono karone logo load na hoy, tahole default icon dekhabe
+                    return Icon(Icons.water_drop_rounded, color: Colors.blue[800], size: 26);
+                  },
+                ),
+              ),
             ),
             SizedBox(width: 12),
             Text(
               'Local Drop', 
-              style: TextStyle(
-                color: Colors.black87, 
-                fontWeight: FontWeight.w800, 
-                fontSize: 22, 
-                letterSpacing: -0.5
-              )
+              style: TextStyle(color: Colors.black87, fontWeight: FontWeight.w800, fontSize: 22, letterSpacing: -0.5)
             ),
           ],
         ),
@@ -350,10 +446,46 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                     ? PulseRadar() 
                     : Icon(Icons.wifi_off_rounded, size: 60, color: Colors.grey[300]),
                   SizedBox(height: 20),
-                  Text(
-                    _isReady ? '$_localIP:4000' : 'Awaiting Network',
-                    style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700, color: Colors.black87),
+                  
+                  // ----------------------------------------------------
+                  // Display Device Name with Edit Option
+                  // ----------------------------------------------------
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Text(
+                        _isReady ? _myDeviceName : 'Awaiting Network',
+                        style: TextStyle(fontSize: 22, fontWeight: FontWeight.w800, color: Colors.black87),
+                      ),
+                      if (_isReady) ...[
+                        SizedBox(width: 8),
+                        InkWell(
+                          onTap: _showEditNameDialog,
+                          borderRadius: BorderRadius.circular(20),
+                          child: Container(
+                            padding: EdgeInsets.all(6),
+                            decoration: BoxDecoration(
+                              color: Colors.grey[100],
+                              shape: BoxShape.circle,
+                            ),
+                            child: Icon(Icons.edit_rounded, size: 18, color: Colors.blue[700]),
+                          ),
+                        )
+                      ]
+                    ],
                   ),
+                  
+                  // ----------------------------------------------------
+                  // IP Address (Smaller Size)
+                  // ----------------------------------------------------
+                  if (_isReady) ...[
+                    SizedBox(height: 4),
+                    Text(
+                      'IP: $_localIP:4000',
+                      style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: Colors.grey[500]),
+                    ),
+                  ],
+
                   SizedBox(height: 8),
                   Text(
                     _isReady ? "Discoverable on local network" : _debugMessage,
